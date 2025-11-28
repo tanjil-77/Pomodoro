@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "762392319174",
+    "project_id": "pomodoro-ea59c",
+    "storage_bucket": "pomodoro-ea59c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:762392319174:android:7f4ee42967d5d2ac2d33c7",
+        "android_client_info": {
+          "package_name": "com.pomodoro.tanjil"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8NxdQXewlWxV2OPzJyfIfcQYKJxnP8dQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
