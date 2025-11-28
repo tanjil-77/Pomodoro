@@ -54,7 +54,6 @@ class _NotepadPageState extends State<NotepadPage> {
         'timestamp': DateTime.now(),
       };
 
-      final index = _notes.length;
       _notes.insert(0, newNote);
       _listKey.currentState?.insertItem(
         0,
@@ -109,7 +108,9 @@ class _NotepadPageState extends State<NotepadPage> {
 
           // Saved notes list দেখানো
           Expanded(
-            child: _notes.isEmpty
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _notes.isEmpty
                 ? const Center(child: Text("No notes yet."))
                 : AnimatedList(
                     key: _listKey,
@@ -125,7 +126,7 @@ class _NotepadPageState extends State<NotepadPage> {
                           ),
                           child: ListTile(
                             leading: const Icon(Icons.note),
-                            title: Text(item),
+                            title: Text(item['content'] ?? 'No content'),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [

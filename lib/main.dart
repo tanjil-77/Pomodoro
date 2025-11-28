@@ -6,6 +6,7 @@ import 'pomodoro_logo.dart';
 import 'health_integration.dart';
 import 'firebase_options.dart';
 import 'services/firebase_service.dart';
+import 'services/supabase_service.dart';
 
 import 'dart:async';
 import 'dart:math';
@@ -22,6 +23,7 @@ import 'widgets/top_banner.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await SupabaseService.initialize();
   runApp(const PomodoroApp());
 }
 

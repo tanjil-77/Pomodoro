@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
-import 'dart:convert';
 import 'dart:io';
+import 'services/supabase_service.dart';
+import 'package:http/http.dart' as http;
 
 class BookListPage extends StatefulWidget {
   const BookListPage({super.key});
@@ -13,8 +13,9 @@ class BookListPage extends StatefulWidget {
 }
 
 class _BookListPageState extends State<BookListPage> {
-  List<Map<String, String>> _books = [];
+  List<Map<String, dynamic>> _books = [];
   bool _isLoading = true;
+  bool _isUploading = false;
 
   @override
   void initState() {
@@ -23,40 +24,19 @@ class _BookListPageState extends State<BookListPage> {
   }
 
   Future<void> _loadBooks() async {
+    setState(() => _isLoading = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final String? booksJson = prefs.getString('my_books');
-
-      if (booksJson != null) {
-        final List<dynamic> decoded = json.decode(booksJson);
-        setState(() {
-          _books = decoded
-              .map((book) => Map<String, String>.from(book))
-              .toList();
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
+      final books = await SupabaseService.getAllBooks();
       setState(() {
+        _books = books;
         _isLoading = false;
       });
-    }
-  }
-
-  Future<void> _saveBooks() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final String booksJson = json.encode(_books);
-      await prefs.setString('my_books', booksJson);
     } catch (e) {
+      setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('সেভ করতে সমস্যা: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error loading books: $e')));
       }
     }
   }
@@ -94,8 +74,9 @@ class _BookListPageState extends State<BookListPage> {
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('বইয়ের তথ্য দিন'),
+        title: const Text('📚 বইয়ের তথ্য দিন'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -104,6 +85,7 @@ class _BookListPageState extends State<BookListPage> {
               decoration: const InputDecoration(
                 labelText: 'বইয়ের নাম',
                 border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.book),
               ),
             ),
             const SizedBox(height: 12),
@@ -112,6 +94,7 @@ class _BookListPageState extends State<BookListPage> {
               decoration: const InputDecoration(
                 labelText: 'লেখকের নাম',
                 border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person),
               ),
             ),
           ],
@@ -122,29 +105,93 @@ class _BookListPageState extends State<BookListPage> {
             child: const Text('বাতিল'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               if (titleController.text.trim().isNotEmpty) {
-                setState(() {
-                  _books.add({
-                    'title': titleController.text.trim(),
-                    'author': authorController.text.trim().isEmpty
-                        ? 'অজানা লেখক'
-                        : authorController.text.trim(),
-                    'path': filePath,
-                  });
-                });
-                _saveBooks();
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('বই যোগ হয়েছে! ✅')),
+                await _uploadBookToSupabase(
+                  filePath,
+                  titleController.text.trim(),
+                  authorController.text.trim().isEmpty
+                      ? 'অজানা লেখক'
+                      : authorController.text.trim(),
+                  defaultTitle,
                 );
               }
             },
-            child: const Text('যোগ করুন'),
+            child: const Text('আপলোড করুন'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _uploadBookToSupabase(
+    String filePath,
+    String title,
+    String author,
+    String fileName,
+  ) async {
+    setState(() => _isUploading = true);
+
+    try {
+      // Show loading dialog
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Uploading to Supabase...'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      final file = File(filePath);
+      final pdfUrl = await SupabaseService.uploadPDF(file, fileName);
+
+      await SupabaseService.saveBookMetadata(
+        title: title,
+        author: author,
+        pdfUrl: pdfUrl,
+        fileName: fileName,
+      );
+
+      setState(() => _isUploading = false);
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ বই Supabase এ সফলভাবে আপলোড হয়েছে!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+
+      await _loadBooks();
+    } catch (e) {
+      setState(() => _isUploading = false);
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('আপলোড করতে সমস্যা: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _deleteBook(int index) async {
@@ -154,7 +201,9 @@ class _BookListPageState extends State<BookListPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('মুছে ফেলবেন?'),
-        content: Text('আপনি কি "${book['title']}" বইটি মুছে ফেলতে চান?'),
+        content: Text(
+          'আপনি কি "${book['title']}" বইটি Supabase থেকে মুছে ফেলতে চান?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -170,46 +219,41 @@ class _BookListPageState extends State<BookListPage> {
     );
 
     if (confirmed == true) {
-      setState(() {
-        _books.removeAt(index);
-      });
-      await _saveBooks();
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('বই মুছে ফেলা হয়েছে')));
+      try {
+        await SupabaseService.deleteBook(book['id'], book['pdf_url']);
+        await _loadBooks();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('বই Supabase থেকে মুছে ফেলা হয়েছে')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('মুছতে সমস্যা: $e')));
+        }
       }
     }
   }
 
   void _openBook(int index) {
     final book = _books[index];
-    final filePath = book['path'];
+    final pdfUrl = book['pdf_url'];
 
-    if (filePath == null || filePath.isEmpty) {
+    if (pdfUrl == null || pdfUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PDF ফাইল খুঁজে পাওয়া যায়নি')),
+        const SnackBar(content: Text('PDF URL খুঁজে পাওয়া যায়নি')),
       );
       return;
     }
 
-    // Check if file exists
-    final file = File(filePath);
-    if (!file.existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('ফাইল খুঁজে পাওয়া যায়নি। হয়তো মুছে ফেলা হয়েছে।'),
-        ),
-      );
-      return;
-    }
-
-    // Open PDF in a new page
+    // Open PDF from URL
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) =>
-            PDFViewerPage(filePath: filePath, title: book['title'] ?? 'PDF'),
+            PDFViewerPage(pdfUrl: pdfUrl, title: book['title'] ?? 'PDF'),
       ),
     );
   }
@@ -218,9 +262,16 @@ class _BookListPageState extends State<BookListPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("📚 আমার বইসম্ভার"),
+        title: const Text("📚 আমার বইসম্ভার (Supabase)"),
         backgroundColor: Colors.deepPurple,
         elevation: 2,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadBooks,
+            tooltip: 'Refresh',
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -230,7 +281,7 @@ class _BookListPageState extends State<BookListPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    Icons.library_books_outlined,
+                    Icons.cloud_upload_outlined,
                     size: 100,
                     color: Colors.grey[400],
                   ),
@@ -245,7 +296,7 @@ class _BookListPageState extends State<BookListPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'নিচের + বাটনে ক্লিক করে\nআপনার ডিভাইস থেকে PDF বই যোগ করুন',
+                    'নিচের + বাটনে ক্লিক করে\nSupabase এ PDF বই আপলোড করুন',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                   ),
@@ -294,7 +345,7 @@ class _BookListPageState extends State<BookListPage> {
                               ],
                             ),
                             child: const Icon(
-                              Icons.menu_book,
+                              Icons.cloud_done,
                               color: Colors.white,
                               size: 36,
                             ),
@@ -336,6 +387,25 @@ class _BookListPageState extends State<BookListPage> {
                                     ),
                                   ],
                                 ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.cloud,
+                                      size: 14,
+                                      color: Colors.blue[600],
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Stored in Supabase',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue[600],
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
                           ),
@@ -369,40 +439,142 @@ class _BookListPageState extends State<BookListPage> {
                 );
               },
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addBook,
-        backgroundColor: Colors.deepPurple,
-        icon: const Icon(Icons.add, size: 28),
-        label: const Text(
-          'বই যোগ করুন',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-      ),
+      floatingActionButton: _isUploading
+          ? const FloatingActionButton(
+              onPressed: null,
+              backgroundColor: Colors.grey,
+              child: CircularProgressIndicator(color: Colors.white),
+            )
+          : FloatingActionButton.extended(
+              onPressed: _addBook,
+              backgroundColor: Colors.deepPurple,
+              icon: const Icon(Icons.cloud_upload, size: 28),
+              label: const Text(
+                'বই আপলোড করুন',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
     );
   }
 }
 
-// PDF Viewer Page
-class PDFViewerPage extends StatelessWidget {
-  final String filePath;
+// PDF Viewer Page with URL support
+class PDFViewerPage extends StatefulWidget {
+  final String pdfUrl;
   final String title;
 
-  const PDFViewerPage({super.key, required this.filePath, required this.title});
+  const PDFViewerPage({super.key, required this.pdfUrl, required this.title});
+
+  @override
+  State<PDFViewerPage> createState() => _PDFViewerPageState();
+}
+
+class _PDFViewerPageState extends State<PDFViewerPage> {
+  File? _localFile;
+  bool _isDownloading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _downloadPDF();
+  }
+
+  Future<void> _downloadPDF() async {
+    try {
+      setState(() {
+        _isDownloading = true;
+        _errorMessage = null;
+      });
+
+      // Download PDF from URL
+      final response = await http.get(Uri.parse(widget.pdfUrl));
+
+      if (response.statusCode == 200) {
+        // Save to temporary directory
+        final tempDir = Directory.systemTemp;
+        final fileName = 'temp_${DateTime.now().millisecondsSinceEpoch}.pdf';
+        final file = File('${tempDir.path}/$fileName');
+        await file.writeAsBytes(response.bodyBytes);
+
+        setState(() {
+          _localFile = file;
+          _isDownloading = false;
+        });
+      } else {
+        setState(() {
+          _errorMessage = 'Failed to download PDF: ${response.statusCode}';
+          _isDownloading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error downloading PDF: $e';
+        _isDownloading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(title, style: const TextStyle(fontSize: 18)),
+        title: Text(widget.title, style: const TextStyle(fontSize: 18)),
         backgroundColor: Colors.deepPurple,
         elevation: 2,
       ),
-      body: SfPdfViewer.file(
-        File(filePath),
-        canShowScrollHead: true,
-        canShowScrollStatus: true,
-        enableDoubleTapZooming: true,
-      ),
+      body: _isDownloading
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Downloading PDF from Supabase...'),
+                ],
+              ),
+            )
+          : _errorMessage != null
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text(
+                    _errorMessage!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: _downloadPDF,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            )
+          : _localFile != null
+          ? SfPdfViewer.file(
+              _localFile!,
+              canShowScrollHead: true,
+              canShowScrollStatus: true,
+              enableDoubleTapZooming: true,
+            )
+          : const Center(child: Text('Unable to load PDF')),
     );
+  }
+
+  @override
+  void dispose() {
+    // Clean up temporary file
+    if (_localFile != null) {
+      _localFile!.delete().catchError((e) {
+        // Ignore errors during cleanup
+        return _localFile!;
+      });
+    }
+    super.dispose();
   }
 }

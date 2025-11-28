@@ -114,4 +114,195 @@ class FirebaseService {
       await saveHistorySession(session);
     }
   }
+
+  // Health Integration Timer State operations
+  static Future<void> saveWaterReminderState({
+    required bool isRunning,
+    required int remainingSeconds,
+    required int totalSeconds,
+    required DateTime startTime,
+  }) async {
+    await _firestore.collection('health_timers').doc('water_reminder').set({
+      'isRunning': isRunning,
+      'remainingSeconds': remainingSeconds,
+      'totalSeconds': totalSeconds,
+      'startTime': Timestamp.fromDate(startTime),
+      'lastUpdated': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<Map<String, dynamic>?> getWaterReminderState() async {
+    try {
+      final doc = await _firestore
+          .collection('health_timers')
+          .doc('water_reminder')
+          .get();
+      if (!doc.exists) return null;
+
+      final data = doc.data()!;
+      final startTime = (data['startTime'] as Timestamp).toDate();
+      final lastUpdated = data['lastUpdated'] as Timestamp?;
+
+      return {
+        'isRunning': data['isRunning'] ?? false,
+        'remainingSeconds': data['remainingSeconds'] ?? 0,
+        'totalSeconds': data['totalSeconds'] ?? 0,
+        'startTime': startTime,
+        'lastUpdated': lastUpdated?.toDate(),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  static Future<void> clearWaterReminderState() async {
+    await _firestore.collection('health_timers').doc('water_reminder').delete();
+  }
+
+  static Future<void> saveMedicineReminderState({
+    required String medicineId,
+    required bool isRunning,
+    required int remainingSeconds,
+    required int totalSeconds,
+    required DateTime startTime,
+  }) async {
+    await _firestore
+        .collection('health_timers')
+        .doc('medicine_$medicineId')
+        .set({
+          'type': 'medicine',
+          'medicineId': medicineId,
+          'isRunning': isRunning,
+          'remainingSeconds': remainingSeconds,
+          'totalSeconds': totalSeconds,
+          'startTime': Timestamp.fromDate(startTime),
+          'lastUpdated': FieldValue.serverTimestamp(),
+        });
+  }
+
+  static Future<Map<String, dynamic>?> getMedicineReminderState(
+    String medicineId,
+  ) async {
+    try {
+      final doc = await _firestore
+          .collection('health_timers')
+          .doc('medicine_$medicineId')
+          .get();
+      if (!doc.exists) return null;
+
+      final data = doc.data()!;
+      final startTime = (data['startTime'] as Timestamp).toDate();
+      final lastUpdated = data['lastUpdated'] as Timestamp?;
+
+      return {
+        'isRunning': data['isRunning'] ?? false,
+        'remainingSeconds': data['remainingSeconds'] ?? 0,
+        'totalSeconds': data['totalSeconds'] ?? 0,
+        'startTime': startTime,
+        'lastUpdated': lastUpdated?.toDate(),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  static Future<void> clearMedicineReminderState(String medicineId) async {
+    await _firestore
+        .collection('health_timers')
+        .doc('medicine_$medicineId')
+        .delete();
+  }
+
+  // Health history operations
+  static Future<void> saveWaterIntakeHistory() async {
+    await _firestore.collection('health_history').add({
+      'type': 'water',
+      'action': 'drink_water',
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<void> saveMedicineIntakeHistory({
+    required String medicineName,
+    required String medicineId,
+  }) async {
+    await _firestore.collection('health_history').add({
+      'type': 'medicine',
+      'action': 'take_medicine',
+      'medicineName': medicineName,
+      'medicineId': medicineId,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<void> saveExerciseHistory({
+    required String exerciseName,
+    required int durationSeconds,
+  }) async {
+    await _firestore.collection('health_history').add({
+      'type': 'exercise',
+      'action': 'complete_exercise',
+      'exerciseName': exerciseName,
+      'durationSeconds': durationSeconds,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<void> saveBMIHistory({
+    required double bmi,
+    required String bmiStage,
+    required double height,
+    required double weight,
+  }) async {
+    await _firestore.collection('health_history').add({
+      'type': 'bmi',
+      'action': 'calculate_bmi',
+      'bmi': bmi,
+      'bmiStage': bmiStage,
+      'height': height,
+      'weight': weight,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getHealthHistory({
+    String? type,
+    int limit = 100,
+  }) async {
+    Query query = _firestore
+        .collection('health_history')
+        .orderBy('timestamp', descending: true);
+
+    if (type != null) {
+      query = query.where('type', isEqualTo: type);
+    }
+
+    final snapshot = await query.limit(limit).get();
+
+    return snapshot.docs.map((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      final timestamp = data['timestamp'] as Timestamp?;
+      return {
+        'id': doc.id,
+        'type': data['type'],
+        'action': data['action'],
+        'medicineName': data['medicineName'],
+        'medicineId': data['medicineId'],
+        'exerciseName': data['exerciseName'],
+        'durationSeconds': data['durationSeconds'],
+        'bmi': data['bmi'],
+        'bmiStage': data['bmiStage'],
+        'height': data['height'],
+        'weight': data['weight'],
+        'timestamp': timestamp?.toDate() ?? DateTime.now(),
+      };
+    }).toList();
+  }
+
+  static Future<void> clearHealthHistory() async {
+    final snapshot = await _firestore.collection('health_history').get();
+    for (var doc in snapshot.docs) {
+      await doc.reference.delete();
+    }
+  }
 }

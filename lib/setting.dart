@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:typed_data';
 import 'services/firebase_service.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -47,10 +49,101 @@ class _SettingsPageState extends State<SettingsPage> {
   bool showNotification = true;
   bool keepAwake = true;
 
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
   @override
   void initState() {
     super.initState();
+    _initNotifications();
     _loadSettings();
+  }
+
+  Future<void> _initNotifications() async {
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
+    const iosSettings = DarwinInitializationSettings();
+    const initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+    );
+    await _notificationsPlugin.initialize(initSettings);
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    final permission = await _notificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestNotificationsPermission();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            permission == true
+                ? '✅ Notification permission granted!'
+                : '❌ Notification permission denied',
+          ),
+          backgroundColor: permission == true ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _testNotification() async {
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        'test_channel',
+        'Test Notifications',
+        channelDescription: 'Test notification channel',
+        importance: Importance.max,
+        priority: Priority.max,
+        enableVibration: vibrate,
+        vibrationPattern: vibrate
+            ? Int64List.fromList([0, 1000, 400, 1000])
+            : null,
+        playSound: alarmSound || notificationSound,
+        styleInformation: const BigTextStyleInformation(
+          'This is a test notification to check if notifications are working properly!',
+          contentTitle: '🔔 Test Notification',
+        ),
+      );
+
+      final iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentSound: alarmSound || notificationSound,
+        presentBadge: true,
+      );
+
+      await _notificationsPlugin.show(
+        999, // Test notification ID
+        '🔔 Test Notification',
+        'This is a test notification!',
+        NotificationDetails(android: androidDetails, iOS: iosDetails),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '✅ Test notification sent! Check your notification bar.',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Notification error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -263,6 +356,57 @@ class _SettingsPageState extends State<SettingsPage> {
               value: alarmSound,
               activeColor: Colors.white,
               onChanged: (val) => setState(() => alarmSound = val),
+            ),
+            const SizedBox(height: 20),
+
+            // Notification Testing Section
+            const Text(
+              "NOTIFICATION SETTINGS",
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _requestNotificationPermission,
+                    icon: const Icon(Icons.notifications_active),
+                    label: const Text('Request Notification Permission'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: _testNotification,
+                    icon: const Icon(Icons.notifications),
+                    label: const Text('Test Notification'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'If notifications aren\'t working, tap "Request Permission" first, then test.',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 20),
 

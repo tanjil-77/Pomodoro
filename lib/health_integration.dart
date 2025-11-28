@@ -8,6 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'widgets/top_banner.dart';
+import 'services/firebase_service.dart';
 
 class HealthIntegrationPage extends StatefulWidget {
   const HealthIntegrationPage({super.key});
@@ -258,6 +259,160 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
     _initNotifications();
     _loadSettings();
     _loadSoundSettings();
+    _restoreTimerStates();
+  }
+
+  Future<void> _restoreTimerStates() async {
+    // Restore water reminder state
+    final waterState = await FirebaseService.getWaterReminderState();
+    if (waterState != null && waterState['isRunning'] == true) {
+      final startTime = waterState['startTime'] as DateTime;
+      final totalSeconds = waterState['totalSeconds'] as int;
+      final elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+
+      if (elapsedSeconds < totalSeconds) {
+        setState(() {
+          _waterReminderEnabled = true;
+          _reminderRunning = true;
+          _reminderTotalSeconds = totalSeconds;
+          _reminderRemainingSeconds = totalSeconds - elapsedSeconds;
+        });
+        _startReminderFromState(totalSeconds - elapsedSeconds, totalSeconds);
+      } else {
+        await FirebaseService.clearWaterReminderState();
+      }
+    }
+
+    // Restore medicine reminder states
+    for (var reminder in _medicineReminders) {
+      final medicineState = await FirebaseService.getMedicineReminderState(
+        reminder.id,
+      );
+      if (medicineState != null && medicineState['isRunning'] == true) {
+        final startTime = medicineState['startTime'] as DateTime;
+        final totalSeconds = medicineState['totalSeconds'] as int;
+        final elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+
+        if (elapsedSeconds < totalSeconds) {
+          if (mounted) {
+            setState(() {
+              _activeMedicineReminder = reminder;
+              _activeMedicineReminder!.isRunning = true;
+              _medicineTotalSeconds = totalSeconds;
+              _medicineRemainingSeconds = totalSeconds - elapsedSeconds;
+            });
+            _startMedicineReminderFromState(
+              reminder,
+              totalSeconds - elapsedSeconds,
+              totalSeconds,
+            );
+          }
+        } else {
+          await FirebaseService.clearMedicineReminderState(reminder.id);
+        }
+      }
+    }
+  }
+
+  void _startReminderFromState(int remainingSeconds, int totalSeconds) {
+    if (_reminderController != null) {
+      _reminderController!.dispose();
+      _reminderController = null;
+    }
+
+    _reminderController = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: remainingSeconds),
+    );
+
+    _reminderController!.addListener(() {
+      if (!mounted) return;
+      setState(() {
+        final progress = _reminderController!.value;
+        _reminderRemainingSeconds = (remainingSeconds * (1 - progress)).ceil();
+      });
+
+      // Save state periodically (every 10 seconds)
+      if (_reminderRemainingSeconds % 10 == 0) {
+        FirebaseService.saveWaterReminderState(
+          isRunning: true,
+          remainingSeconds: _reminderRemainingSeconds,
+          totalSeconds: totalSeconds,
+          startTime: DateTime.now().subtract(
+            Duration(seconds: totalSeconds - _reminderRemainingSeconds),
+          ),
+        );
+      }
+    });
+
+    _reminderController!.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        _onWaterReminderComplete();
+        FirebaseService.clearWaterReminderState();
+        if (_waterReminderEnabled && _reminderRunning) {
+          _reminderController!.forward(from: 0);
+          _startReminder(); // Restart with full duration
+        }
+      }
+    });
+
+    _reminderController!.forward(from: 0);
+  }
+
+  void _startMedicineReminderFromState(
+    MedicineReminder reminder,
+    int remainingSeconds,
+    int totalSeconds,
+  ) {
+    if (_medicineController != null) {
+      _medicineController!.dispose();
+      _medicineController = null;
+    }
+
+    _medicineController = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: remainingSeconds),
+    );
+
+    _medicineController!.addListener(() {
+      if (!mounted) return;
+      setState(() {
+        final progress = _medicineController!.value;
+        _medicineRemainingSeconds = (remainingSeconds * (1 - progress)).ceil();
+      });
+
+      // Save state periodically (every 10 seconds)
+      if (_medicineRemainingSeconds % 10 == 0) {
+        FirebaseService.saveMedicineReminderState(
+          medicineId: reminder.id,
+          isRunning: true,
+          remainingSeconds: _medicineRemainingSeconds,
+          totalSeconds: totalSeconds,
+          startTime: DateTime.now().subtract(
+            Duration(seconds: totalSeconds - _medicineRemainingSeconds),
+          ),
+        );
+      }
+    });
+
+    _medicineController!.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        if (reminder.isCourseCompleted) {
+          _stopMedicineReminder(reminder);
+          FirebaseService.clearMedicineReminderState(reminder.id);
+          return;
+        }
+        _onMedicineReminderComplete(reminder.medicineName);
+        if (_activeMedicineReminder != null &&
+            _activeMedicineReminder!.isRunning &&
+            !reminder.isCourseCompleted) {
+          _medicineController!.forward(from: 0);
+          _startMedicineReminder(reminder); // Restart with full duration
+        }
+      }
+    });
+
+    _medicineController!.forward(from: 0);
   }
 
   Future<void> _initNotifications() async {
@@ -416,6 +571,9 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
   Future<void> _onWaterReminderComplete() async {
     debugPrint('⏰ Water reminder completed!');
 
+    // Save to history
+    await FirebaseService.saveWaterIntakeHistory();
+
     // Show notification first (upore status bar e)
     await _showHealthNotification(
       '💧 Water Reminder',
@@ -442,6 +600,14 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
 
   Future<void> _onMedicineReminderComplete(String medicineName) async {
     debugPrint('⏰ Medicine reminder completed: $medicineName');
+
+    // Save to history
+    if (_activeMedicineReminder != null) {
+      await FirebaseService.saveMedicineIntakeHistory(
+        medicineName: medicineName,
+        medicineId: _activeMedicineReminder!.id,
+      );
+    }
 
     // Show notification first (upore status bar e)
     await _showHealthNotification(
@@ -614,6 +780,14 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
     _bmiAnimationController?.reset();
     _bmiAnimationController?.forward();
     _saveSettings();
+
+    // Save BMI calculation to history
+    FirebaseService.saveBMIHistory(
+      bmi: bmiValue,
+      bmiStage: _bmiStage,
+      height: heightInches,
+      weight: weightKg,
+    );
   }
 
   String _getActivityLevelLabel(String level) {
@@ -990,6 +1164,16 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
       duration: Duration(seconds: _reminderTotalSeconds),
     );
     _reminderRunning = true;
+
+    // Save initial state to Firebase
+    final startTime = DateTime.now();
+    FirebaseService.saveWaterReminderState(
+      isRunning: true,
+      remainingSeconds: _reminderTotalSeconds,
+      totalSeconds: _reminderTotalSeconds,
+      startTime: startTime,
+    );
+
     _reminderController!.addListener(() {
       if (!mounted) return;
       setState(() {
@@ -997,6 +1181,16 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
         _reminderRemainingSeconds = (_reminderTotalSeconds * (1 - progress))
             .ceil();
       });
+
+      // Save state periodically (every 10 seconds)
+      if (_reminderRemainingSeconds % 10 == 0) {
+        FirebaseService.saveWaterReminderState(
+          isRunning: true,
+          remainingSeconds: _reminderRemainingSeconds,
+          totalSeconds: _reminderTotalSeconds,
+          startTime: startTime,
+        );
+      }
     });
     _reminderController!.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
@@ -1006,8 +1200,10 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
         );
         // Trigger notification, sound, and vibration
         _onWaterReminderComplete();
+        FirebaseService.clearWaterReminderState();
         if (_waterReminderEnabled && _reminderRunning) {
           _reminderController!.forward(from: 0);
+          _startReminder(); // Restart properly
         }
       }
     });
@@ -1021,6 +1217,7 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
       _reminderController = null;
     }
     _reminderRunning = false;
+    FirebaseService.clearWaterReminderState();
     setState(() {});
   }
 
@@ -1049,6 +1246,16 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
       _activeMedicineReminder!.isRunning = true;
     });
 
+    // Save initial state to Firebase
+    final medicineStartTime = DateTime.now();
+    FirebaseService.saveMedicineReminderState(
+      medicineId: reminder.id,
+      isRunning: true,
+      remainingSeconds: _medicineTotalSeconds,
+      totalSeconds: _medicineTotalSeconds,
+      startTime: medicineStartTime,
+    );
+
     _medicineController!.addListener(() {
       if (!mounted) return;
       setState(() {
@@ -1056,6 +1263,17 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
         _medicineRemainingSeconds = (_medicineTotalSeconds * (1 - progress))
             .ceil();
       });
+
+      // Save state periodically (every 10 seconds)
+      if (_medicineRemainingSeconds % 10 == 0) {
+        FirebaseService.saveMedicineReminderState(
+          medicineId: reminder.id,
+          isRunning: true,
+          remainingSeconds: _medicineRemainingSeconds,
+          totalSeconds: _medicineTotalSeconds,
+          startTime: medicineStartTime,
+        );
+      }
     });
 
     _medicineController!.addStatusListener((status) {
@@ -1087,12 +1305,14 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
         );
         // Trigger notification, sound, and vibration
         _onMedicineReminderComplete(reminder.medicineName);
+        FirebaseService.clearMedicineReminderState(reminder.id);
         if (_activeMedicineReminder != null &&
             _activeMedicineReminder!.isRunning &&
             !reminder.isCourseCompleted) {
           _medicineController!.forward(
             from: 0,
           ); // Restart timer if not completed
+          _startMedicineReminder(reminder); // Restart properly
         }
       }
     });
@@ -1104,6 +1324,7 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
       _medicineController?.stop();
       _medicineController?.dispose();
       _medicineController = null;
+      FirebaseService.clearMedicineReminderState(reminder.id);
       setState(() {
         _activeMedicineReminder = null;
         _medicineRemainingSeconds = 0;
@@ -2868,6 +3089,14 @@ class _ExerciseDemoPageState extends State<ExerciseDemoPage>
         if (_secondsLeft <= 0) {
           if (_currentRep >= widget.exercise['reps']) {
             _stopDemo();
+
+            // Save exercise completion to history
+            FirebaseService.saveExerciseHistory(
+              exerciseName: widget.exercise['title'],
+              durationSeconds:
+                  widget.exercise['duration_seconds'] * widget.exercise['reps'],
+            );
+
             ScaffoldMessenger.of(
               context,
             ).showSnackBar(const SnackBar(content: Text('Exercise complete')));
