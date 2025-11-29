@@ -581,6 +581,11 @@ class _HistoryPageState extends State<HistoryPage>
   late Animation<double> _fadeAnimation;
 
   List<Map<String, dynamic>> _sessions = [];
+  List<Map<String, dynamic>> _allHealthHistory =
+      []; // All health data from Firebase
+  List<Map<String, dynamic>> _healthHistory = []; // Filtered health data
+  String _healthFilter = 'all'; // all, water, medicine, exercise, bmi
+
   final Map<String, int> _stats = {
     'totalSessions': 0,
     'totalMinutes': 0,
@@ -588,10 +593,17 @@ class _HistoryPageState extends State<HistoryPage>
     'weekSessions': 0,
   };
 
+  final Map<String, int> _healthStats = {
+    'totalWater': 0,
+    'totalMedicine': 0,
+    'totalExercise': 0,
+    'totalBMI': 0,
+  };
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
 
     // Fade animation for stats cards
     _fadeController = AnimationController(
@@ -604,6 +616,7 @@ class _HistoryPageState extends State<HistoryPage>
     );
 
     _loadHistory();
+    _loadHealthHistory();
     _fadeController.forward();
   }
 
@@ -651,6 +664,54 @@ class _HistoryPageState extends State<HistoryPage>
     }
   }
 
+  Future<void> _loadHealthHistory() async {
+    try {
+      // Load ALL health history without type filter (avoid Firestore index requirement)
+      final history = await FirebaseService.getHealthHistory(
+        type: null, // Load all types
+        limit: 500,
+      );
+
+      setState(() {
+        _allHealthHistory = history;
+        _applyHealthFilter();
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading health history: $e')),
+        );
+      }
+    }
+  }
+
+  void _applyHealthFilter() {
+    setState(() {
+      // Filter on client side
+      if (_healthFilter == 'all') {
+        _healthHistory = _allHealthHistory;
+      } else {
+        _healthHistory = _allHealthHistory
+            .where((h) => h['type'] == _healthFilter)
+            .toList();
+      }
+
+      // Calculate health stats from ALL data
+      _healthStats['totalWater'] = _allHealthHistory
+          .where((h) => h['type'] == 'water')
+          .length;
+      _healthStats['totalMedicine'] = _allHealthHistory
+          .where((h) => h['type'] == 'medicine')
+          .length;
+      _healthStats['totalExercise'] = _allHealthHistory
+          .where((h) => h['type'] == 'exercise')
+          .length;
+      _healthStats['totalBMI'] = _allHealthHistory
+          .where((h) => h['type'] == 'bmi')
+          .length;
+    });
+  }
+
   Future<void> _clearHistory() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -692,6 +753,49 @@ class _HistoryPageState extends State<HistoryPage>
     }
   }
 
+  Future<void> _clearHealthHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Health History?'),
+        content: const Text(
+          'This will delete all your health activity history from Firebase. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await FirebaseService.clearHealthHistory();
+        _loadHealthHistory();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Health history cleared from Firebase'),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error clearing health history: $e')),
+          );
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -719,16 +823,23 @@ class _HistoryPageState extends State<HistoryPage>
           indicatorColor: Colors.white,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
+          isScrollable: true,
           tabs: const [
             Tab(text: 'STATS'),
             Tab(text: 'TODAY'),
             Tab(text: 'ALL'),
+            Tab(text: 'HEALTH'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [_buildStatsTab(), _buildTodayTab(), _buildAllTab()],
+        children: [
+          _buildStatsTab(),
+          _buildTodayTab(),
+          _buildAllTab(),
+          _buildHealthTab(),
+        ],
       ),
     );
   }
@@ -1229,5 +1340,345 @@ class _HistoryPageState extends State<HistoryPage>
       return 'Yesterday';
     }
     return '${date.day}/${date.month}/${date.year}';
+  }
+
+  Widget _buildHealthTab() {
+    return Column(
+      children: [
+        // Filter chips
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildFilterChip(
+                  'All',
+                  'all',
+                  Icons.health_and_safety,
+                  const Color(0xFF6EA98D),
+                ),
+                const SizedBox(width: 8),
+                _buildFilterChip(
+                  'Water',
+                  'water',
+                  Icons.water_drop,
+                  Colors.blue,
+                ),
+                const SizedBox(width: 8),
+                _buildFilterChip(
+                  'Medicine',
+                  'medicine',
+                  Icons.medication,
+                  Colors.red,
+                ),
+                const SizedBox(width: 8),
+                _buildFilterChip(
+                  'Exercise',
+                  'exercise',
+                  Icons.fitness_center,
+                  Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                _buildFilterChip(
+                  'BMI',
+                  'bmi',
+                  Icons.monitor_weight,
+                  Colors.purple,
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Stats summary
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white24,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildHealthStat(
+                Icons.water_drop,
+                _healthStats['totalWater']!,
+                'Water',
+                Colors.blue,
+              ),
+              _buildHealthStat(
+                Icons.medication,
+                _healthStats['totalMedicine']!,
+                'Medicine',
+                Colors.red,
+              ),
+              _buildHealthStat(
+                Icons.fitness_center,
+                _healthStats['totalExercise']!,
+                'Exercise',
+                Colors.orange,
+              ),
+              _buildHealthStat(
+                Icons.monitor_weight,
+                _healthStats['totalBMI']!,
+                'BMI',
+                Colors.purple,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Health history list
+        Expanded(
+          child: _healthHistory.isEmpty
+              ? Center(
+                  child: TweenAnimationBuilder<double>(
+                    duration: const Duration(milliseconds: 800),
+                    tween: Tween(begin: 0.0, end: 1.0),
+                    curve: Curves.easeOut,
+                    builder: (context, value, child) {
+                      return Opacity(
+                        opacity: value,
+                        child: Transform.scale(
+                          scale: 0.9 + (value * 0.1),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.healing,
+                          size: 80,
+                          color: Colors.white.withAlpha((0.3 * 255).toInt()),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No health activities yet',
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Complete water, medicine, or exercise sessions!',
+                          style: TextStyle(color: Colors.white54, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: _healthHistory.length,
+                  itemBuilder: (context, index) {
+                    return TweenAnimationBuilder<double>(
+                      duration: Duration(milliseconds: 400 + (index * 50)),
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, child) {
+                        return Transform.translate(
+                          offset: Offset(0, 30 * (1 - value)),
+                          child: Opacity(opacity: value, child: child),
+                        );
+                      },
+                      child: _buildHealthCard(_healthHistory[index]),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilterChip(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    final isSelected = _healthFilter == value;
+    return FilterChip(
+      selected: isSelected,
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: isSelected ? Colors.white : color),
+          const SizedBox(width: 4),
+          Text(label),
+        ],
+      ),
+      selectedColor: color,
+      backgroundColor: isSelected
+          ? color
+          : Colors.white.withAlpha((0.9 * 255).toInt()),
+      side: BorderSide(color: color, width: 2),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.white : color,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+      ),
+      onSelected: (selected) {
+        setState(() {
+          _healthFilter = value;
+          _applyHealthFilter(); // Filter on client side instead of reloading
+        });
+      },
+    );
+  }
+
+  Widget _buildHealthStat(IconData icon, int count, String label, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 24),
+        const SizedBox(height: 4),
+        Text(
+          count.toString(),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 11),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHealthCard(Map<String, dynamic> activity) {
+    final type = activity['type'] as String;
+    final timestamp = activity['timestamp'] as DateTime;
+
+    IconData icon;
+    Color color;
+    String title;
+    String subtitle = '';
+
+    switch (type) {
+      case 'water':
+        icon = Icons.water_drop;
+        color = Colors.blue;
+        title = 'Water Intake';
+        subtitle = 'Completed water reminder';
+        break;
+      case 'medicine':
+        icon = Icons.medication;
+        color = Colors.red;
+        final medicineName = activity['medicineName'] as String? ?? 'Medicine';
+        title = 'Medicine Taken';
+        subtitle = medicineName;
+        break;
+      case 'exercise':
+        icon = Icons.fitness_center;
+        color = Colors.orange;
+        final exerciseName = activity['exerciseName'] as String? ?? 'Exercise';
+        final duration = activity['durationSeconds'] as int? ?? 0;
+        title = 'Exercise Completed';
+        subtitle = '$exerciseName (${duration}s)';
+        break;
+      case 'bmi':
+        icon = Icons.monitor_weight;
+        color = Colors.purple;
+        final bmi = activity['bmi'] as double? ?? 0.0;
+        final stage = activity['bmiStage'] as String? ?? '';
+        title = 'BMI Calculated';
+        subtitle = 'BMI: ${bmi.toStringAsFixed(1)} - $stage';
+        break;
+      default:
+        icon = Icons.health_and_safety;
+        color = Colors.grey;
+        title = 'Health Activity';
+        subtitle = type;
+    }
+
+    return TweenAnimationBuilder<double>(
+      duration: const Duration(milliseconds: 300),
+      tween: Tween(begin: 0.0, end: 1.0),
+      curve: Curves.easeOut,
+      builder: (context, value, child) {
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white24,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: color.withAlpha((0.2 * value * 255).toInt()),
+                blurRadius: 8 * value,
+                offset: Offset(0, 4 * value),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              TweenAnimationBuilder<double>(
+                duration: const Duration(milliseconds: 400),
+                tween: Tween(begin: 0.0, end: 1.0),
+                curve: Curves.elasticOut,
+                builder: (context, scaleValue, child) {
+                  return Transform.scale(scale: scaleValue, child: child);
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 24),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _formatTime(timestamp),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _formatDate(timestamp),
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
