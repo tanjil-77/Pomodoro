@@ -397,12 +397,15 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
 
     _medicineController!.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
+        // Always save history when timer completes
+        _onMedicineReminderComplete(reminder);
+
         if (reminder.isCourseCompleted) {
           _stopMedicineReminder(reminder);
           FirebaseService.clearMedicineReminderState(reminder.id);
           return;
         }
-        _onMedicineReminderComplete(reminder.medicineName);
+
         if (_activeMedicineReminder != null &&
             _activeMedicineReminder!.isRunning &&
             !reminder.isCourseCompleted) {
@@ -598,16 +601,14 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
     await _playNotificationSound();
   }
 
-  Future<void> _onMedicineReminderComplete(String medicineName) async {
-    debugPrint('⏰ Medicine reminder completed: $medicineName');
+  Future<void> _onMedicineReminderComplete(MedicineReminder reminder) async {
+    debugPrint('⏰ Medicine reminder completed: ${reminder.medicineName}');
 
-    // Save to history
-    if (_activeMedicineReminder != null) {
-      await FirebaseService.saveMedicineIntakeHistory(
-        medicineName: medicineName,
-        medicineId: _activeMedicineReminder!.id,
-      );
-    }
+    // Save to history with medicine ID
+    await FirebaseService.saveMedicineIntakeHistory(
+      medicineName: reminder.medicineName,
+      medicineId: reminder.id,
+    );
 
     // Show notification first (upore status bar e)
     await _showHealthNotification(
@@ -1304,7 +1305,7 @@ class _HealthIntegrationPageState extends State<HealthIntegrationPage>
           ),
         );
         // Trigger notification, sound, and vibration
-        _onMedicineReminderComplete(reminder.medicineName);
+        _onMedicineReminderComplete(reminder);
         FirebaseService.clearMedicineReminderState(reminder.id);
         if (_activeMedicineReminder != null &&
             _activeMedicineReminder!.isRunning &&
